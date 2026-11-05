@@ -1,11 +1,11 @@
 /**
  * Click Handheld 128x64 OLED Hardware Simulator Engine
  * 
- * Accurately emulates:
- * - SSD1306 128x64 monochrome frame buffer
- * - GP27 Piezo Buzzer via Web Audio API (Square wave oscillator with envelope)
- * - GP11 2x WS2812 RGB LEDs with real-time diffusion glow
- * - Tactile ACTION (GP2) and MODE (GP3) button states
+ * Accurately emulates Click firmware architecture (RP2354A & ESP32):
+ * - SSD1306 128x64 monochrome frame buffer with drawBitmap, lines, circles, and 5x7 typography
+ * - GP27 Piezo Buzzer via Web Audio API (Square wave oscillator with non-blocking presets matching SoundFX.h)
+ * - GP11 2x WS2812 RGB LEDs with real-time diffusion glow, flashing, breathing, and celebration party modes
+ * - Tactile ACTION (GP2) and MODE (GP3) button states with click, hold, and press tracking
  */
 
 // 5x7 Minimalist ASCII Bitmap Font for retro OLED rendering
@@ -110,6 +110,7 @@ export const FONT_5X7: Record<string, number[]> = {
 export class AudioBuzzerSynthesizer {
   private ctx: AudioContext | null = null;
   public enabled: boolean = true;
+  private activeTimeouts: any[] = [];
 
   private initContext() {
     if (!this.ctx && typeof window !== 'undefined') {
@@ -121,6 +122,11 @@ export class AudioBuzzerSynthesizer {
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }
+  }
+
+  stop() {
+    this.activeTimeouts.forEach(clearTimeout);
+    this.activeTimeouts = [];
   }
 
   playTone(freq: number, durationMs: number) {
@@ -135,7 +141,6 @@ export class AudioBuzzerSynthesizer {
       osc.type = 'square'; // Authentic piezo buzzer sound
       osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
 
-      // Low volume pleasant envelope
       gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + durationMs / 1000);
 
@@ -149,36 +154,90 @@ export class AudioBuzzerSynthesizer {
     }
   }
 
+  playSequence(notes: { freq: number; durMs: number; delayMs?: number }[]) {
+    if (!this.enabled) return;
+    this.stop();
+    let currentDelay = 0;
+    notes.forEach(note => {
+      const t = setTimeout(() => {
+        if (note.freq > 0) {
+          this.playTone(note.freq, note.durMs);
+        }
+      }, currentDelay);
+      this.activeTimeouts.push(t);
+      currentDelay += note.durMs + (note.delayMs || 0);
+    });
+  }
+
+  // --- Exact Click SoundFX.h Presets ---
+
   playClick() {
-    this.playTone(2800, 12);
+    this.playTone(2800, 10);
+  }
+
+  playSisyphusDownhill() {
+    this.playSequence([
+      { freq: 1046, durMs: 25, delayMs: 20 },
+      { freq: 880, durMs: 25, delayMs: 20 },
+      { freq: 784, durMs: 35 }
+    ]);
+  }
+
+  playSisyphusBottomChime() {
+    this.playSequence([
+      { freq: 1318, durMs: 35, delayMs: 15 },
+      { freq: 1760, durMs: 65 }
+    ]);
   }
 
   playFlap() {
-    this.playTone(900, 15);
-    setTimeout(() => this.playTone(1400, 20), 20);
+    this.playSequence([
+      { freq: 900, durMs: 15, delayMs: 5 },
+      { freq: 1400, durMs: 20 }
+    ]);
   }
 
   playScore() {
-    this.playTone(1046, 40);
-    setTimeout(() => this.playTone(1318, 65), 45);
+    this.playSequence([
+      { freq: 1046, durMs: 40, delayMs: 10 },
+      { freq: 1318, durMs: 65 }
+    ]);
   }
 
   playGameOver() {
-    this.playTone(320, 60);
-    setTimeout(() => this.playTone(220, 80), 65);
-    setTimeout(() => this.playTone(130, 160), 150);
+    this.playSequence([
+      { freq: 320, durMs: 60, delayMs: 10 },
+      { freq: 220, durMs: 80, delayMs: 10 },
+      { freq: 130, durMs: 160 }
+    ]);
   }
 
-  playFanfare() {
-    const notes = [
-      { f: 523, d: 80, delay: 0 },
-      { f: 659, d: 80, delay: 90 },
-      { f: 784, d: 80, delay: 180 },
-      { f: 1046, d: 240, delay: 280 }
-    ];
-    notes.forEach(n => {
-      setTimeout(() => this.playTone(n.f, n.d), n.delay);
-    });
+  playJustTenStart() {
+    this.playTone(880, 20);
+  }
+
+  playJustTenRelease() {
+    this.playSequence([
+      { freq: 1318, durMs: 40, delayMs: 20 },
+      { freq: 988, durMs: 65 }
+    ]);
+  }
+
+  playCelebrationFanfare() {
+    this.playSequence([
+      { freq: 523, durMs: 80, delayMs: 10 },
+      { freq: 659, durMs: 80, delayMs: 10 },
+      { freq: 784, durMs: 80, delayMs: 20 },
+      { freq: 1046, durMs: 260 }
+    ]);
+  }
+
+  playStartup() {
+    this.playSequence([
+      { freq: 1046, durMs: 45, delayMs: 10 },
+      { freq: 1318, durMs: 45, delayMs: 10 },
+      { freq: 1568, durMs: 90 }
+    ]);
   }
 }
 
@@ -197,7 +256,10 @@ export class DisplayFramebuffer {
     { r: 0, g: 0, b: 0 }
   ];
   public sound: AudioBuzzerSynthesizer;
+
   private flashTimeout: any = null;
+  private celebrationEndMs = 0;
+  private breatheConfig: { r: number; g: number; b: number; periodMs: number } | null = null;
 
   constructor(sound: AudioBuzzerSynthesizer) {
     this.buffer = new Uint8Array(128 * 64);
@@ -208,11 +270,35 @@ export class DisplayFramebuffer {
     this.buffer.fill(0);
   }
 
+  clearDisplay() {
+    this.clear();
+  }
+
   drawPixel(x: number, y: number, color: number = 1) {
     const ix = Math.floor(x);
     const iy = Math.floor(y);
     if (ix < 0 || ix >= 128 || iy < 0 || iy >= 64) return;
     this.buffer[iy * 128 + ix] = color ? 1 : 0;
+  }
+
+  drawFastHLine(x: number, y: number, w: number, color: number = 1) {
+    const startX = Math.floor(x);
+    const py = Math.floor(y);
+    if (py < 0 || py >= 64) return;
+    const endX = Math.min(128, startX + Math.floor(w));
+    for (let px = Math.max(0, startX); px < endX; px++) {
+      this.buffer[py * 128 + px] = color ? 1 : 0;
+    }
+  }
+
+  drawFastVLine(x: number, y: number, h: number, color: number = 1) {
+    const px = Math.floor(x);
+    const startY = Math.floor(y);
+    if (px < 0 || px >= 128) return;
+    const endY = Math.min(64, startY + Math.floor(h));
+    for (let py = Math.max(0, startY); py < endY; py++) {
+      this.buffer[py * 128 + px] = color ? 1 : 0;
+    }
   }
 
   drawLine(x0: number, y0: number, x1: number, y1: number, color: number = 1) {
@@ -255,11 +341,15 @@ export class DisplayFramebuffer {
         }
       }
     } else {
-      this.drawLine(startX, startY, startX + width - 1, startY, color);
-      this.drawLine(startX, startY + height - 1, startX + width - 1, startY + height - 1, color);
-      this.drawLine(startX, startY, startX, startY + height - 1, color);
-      this.drawLine(startX + width - 1, startY, startX + width - 1, startY + height - 1, color);
+      this.drawFastHLine(startX, startY, width, color);
+      this.drawFastHLine(startX, startY + height - 1, width, color);
+      this.drawFastVLine(startX, startY, height, color);
+      this.drawFastVLine(startX + width - 1, startY, height, color);
     }
+  }
+
+  fillRect(x: number, y: number, w: number, h: number, color: number = 1) {
+    this.drawRect(x, y, w, h, true, color);
   }
 
   drawCircle(cx: number, cy: number, r: number, fill: boolean = false, color: number = 1) {
@@ -302,6 +392,36 @@ export class DisplayFramebuffer {
     }
   }
 
+  fillCircle(cx: number, cy: number, r: number, color: number = 1) {
+    this.drawCircle(cx, cy, r, true, color);
+  }
+
+  /**
+   * Adafruit SSD1306 PROGMEM drawBitmap implementation
+   */
+  drawBitmap(
+    x: number,
+    y: number,
+    bitmap: number[] | Uint8Array,
+    w: number,
+    h: number,
+    color: number = 1
+  ) {
+    const startX = Math.floor(x);
+    const startY = Math.floor(y);
+    const bytesPerRow = Math.ceil(w / 8);
+
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const byteIndex = j * bytesPerRow + Math.floor(i / 8);
+        const byte = bitmap[byteIndex];
+        if (byte !== undefined && (byte & (128 >> (i % 8)))) {
+          this.drawPixel(startX + i, startY + j, color);
+        }
+      }
+    }
+  }
+
   drawChar(c: string, startX: number, startY: number, size: number = 1, color: number = 1) {
     const glyph = FONT_5X7[c] || FONT_5X7['?'] || [0x00, 0x00, 0x00, 0x00, 0x00];
     for (let col = 0; col < 5; col++) {
@@ -339,25 +459,54 @@ export class DisplayFramebuffer {
     }
   }
 
-  // LED Controls
+  // --- WS2812 RGB LED Controls ---
+
   setLed(index: 0 | 1, r: number, g: number, b: number) {
-    this.leds[index] = { r, g, b };
+    this.leds[index] = { r: Math.round(r), g: Math.round(g), b: Math.round(b) };
   }
 
   setBothLeds(r: number, g: number, b: number) {
-    this.leds[0] = { r, g, b };
-    this.leds[1] = { r, g, b };
+    this.setLed(0, r, g, b);
+    this.setLed(1, r, g, b);
   }
 
   flashLeds(r: number, g: number, b: number, durationMs: number = 200) {
     if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    this.breatheConfig = null;
     this.setBothLeds(r, g, b);
     this.flashTimeout = setTimeout(() => {
       this.clearLeds();
     }, durationMs);
   }
 
+  startCelebration(durationMs: number = 1500) {
+    this.celebrationEndMs = performance.now() + durationMs;
+  }
+
+  startBreathe(r: number, g: number, b: number, periodMs: number = 2000) {
+    this.breatheConfig = { r, g, b, periodMs };
+  }
+
+  updateLeds(now: number) {
+    if (now < this.celebrationEndMs) {
+      // Rotating rainbow celebration party mode
+      const hue = (now % 1000) / 1000;
+      const r = Math.round(128 + 127 * Math.sin(hue * 2 * Math.PI));
+      const g = Math.round(128 + 127 * Math.sin(hue * 2 * Math.PI + (2 * Math.PI) / 3));
+      const b = Math.round(128 + 127 * Math.sin(hue * 2 * Math.PI + (4 * Math.PI) / 3));
+      this.setLed(0, r, g, b);
+      this.setLed(1, b, r, g);
+    } else if (this.breatheConfig) {
+      const { r, g, b, periodMs } = this.breatheConfig;
+      const wave = (Math.sin((now % periodMs) / periodMs * Math.PI * 2) + 1) / 2;
+      this.setBothLeds(r * wave, g * wave, b * wave);
+    }
+  }
+
   clearLeds() {
+    if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    this.celebrationEndMs = 0;
+    this.breatheConfig = null;
     this.leds[0] = { r: 0, g: 0, b: 0 };
     this.leds[1] = { r: 0, g: 0, b: 0 };
   }

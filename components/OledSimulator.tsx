@@ -9,8 +9,6 @@ import {
   VolumeX,
   Camera,
   Cpu,
-  Radio,
-  Sparkles,
   Keyboard,
   Info
 } from 'lucide-react';
@@ -19,6 +17,7 @@ import {
   AudioBuzzerSynthesizer,
   LedState
 } from '@/lib/simulator-engine';
+import * as ClickArt from '@/lib/click-artwork';
 
 interface OledSimulatorProps {
   jsCode: string;
@@ -47,12 +46,16 @@ export default function OledSimulator({
   const [fps, setFps] = useState(60);
   const [isActionActive, setIsActionActive] = useState(false);
   const [isModeActive, setIsModeActive] = useState(false);
+  const isActionActiveRef = useRef(false);
+  const isModeActiveRef = useRef(false);
+  const actionPressStartTime = useRef<number>(0);
+  const modePressStartTime = useRef<number>(0);
+
   const [ledColors, setLedColors] = useState<[LedState, LedState]>([
     { r: 0, g: 0, b: 0 },
     { r: 0, g: 0, b: 0 }
   ]);
   const [simError, setSimError] = useState<string | null>(null);
-  const [activeMcu, setActiveMcu] = useState<'RP2354A' | 'ESP32'>('RP2354A');
 
   // Initialize Audio & Framebuffer
   useEffect(() => {
@@ -64,6 +67,7 @@ export default function OledSimulator({
     fbRef.current = fb;
 
     return () => {
+      synth.stop();
       synthRef.current = null;
       fbRef.current = null;
     };
@@ -84,30 +88,90 @@ export default function OledSimulator({
     try {
       fbRef.current.clear();
       fbRef.current.clearLeds();
+      synthRef.current.stop();
 
-      // Wrap code in a safe evaluation closure
+      // Wrap code in a safe evaluation closure conforming to Click SDK
       const wrapped = `
-        return (function() {
-          ${jsCode};
-          if (typeof Microapplet !== 'undefined') return new Microapplet();
-          if (typeof SisyphusApplet !== 'undefined') return new SisyphusApplet();
-          if (typeof JustTenApplet !== 'undefined') return new JustTenApplet();
-          if (typeof PomodoroApplet !== 'undefined') return new PomodoroApplet();
+        return (function(art) {
+          const {
+            BOULDER_FRAMES,
+            BOULDER_WIDTH,
+            BOULDER_HEIGHT,
+            SISYPHUS_IDLE_BMP,
+            SISYPHUS_IDLE_WIDTH,
+            SISYPHUS_IDLE_HEIGHT,
+            SISYPHUS_REST_BMP,
+            SISYPHUS_REST_WIDTH,
+            SISYPHUS_REST_HEIGHT,
+            SISYPHUS_PUSH_FRAMES,
+            SISYPHUS_PUSH_WIDTH,
+            SISYPHUS_PUSH_HEIGHT,
+            DISTANT_MOUNTAINS_BMP,
+            DISTANT_MTN_WIDTH,
+            DISTANT_MTN_HEIGHT,
+            CLOUD_WISP_1_BMP,
+            CLOUD_WISP_1_WIDTH,
+            CLOUD_WISP_1_HEIGHT,
+            FLAPPY_BIRD_CHAR_BMP,
+            FLAPPY_BIRD_CHAR_WIDTH,
+            FLAPPY_BIRD_CHAR_HEIGHT,
+            FLAPPY_BIRD_START_BMP,
+            FLAPPY_BIRD_START_WIDTH,
+            FLAPPY_BIRD_START_HEIGHT,
+            FLAPPY_BIRD_END_BMP,
+            FLAPPY_BIRD_END_WIDTH,
+            FLAPPY_BIRD_END_HEIGHT,
+            JUST_TEN_START_BMP,
+            JUST_TEN_START_WIDTH,
+            JUST_TEN_START_HEIGHT
+          } = art || {};
+
+          ${jsCode}
           
-          // Fallback: look for any class or constructor in scope
-          const matched = /class\\s+([A-Za-z0-9_]+)/.exec(\`${jsCode.replace(/`/g, '\\`')}\`);
-          if (matched && matched[1] && eval("typeof " + matched[1]) === 'function') {
-            return eval("new " + matched[1] + "()");
+          const candidates = [
+            typeof CounterApplet !== 'undefined' ? CounterApplet : null,
+            typeof FlappyBirdApplet !== 'undefined' ? FlappyBirdApplet : null,
+            typeof FloppyBirdApplet !== 'undefined' ? FloppyBirdApplet : null,
+            typeof TimingGameApplet !== 'undefined' ? TimingGameApplet : null,
+            typeof HomeApplet !== 'undefined' ? HomeApplet : null,
+            typeof SettingsApplet !== 'undefined' ? SettingsApplet : null,
+            typeof SisyphusApplet !== 'undefined' ? SisyphusApplet : null,
+            typeof JustTenApplet !== 'undefined' ? JustTenApplet : null,
+            typeof PomodoroApplet !== 'undefined' ? PomodoroApplet : null,
+            typeof Microapplet !== 'undefined' ? Microapplet : null,
+          ].filter(Boolean);
+
+          if (candidates.length > 0) {
+            return new candidates[0]();
           }
+
+          // Fallback: search for any declared class
+          const matches = [...\`${jsCode.replace(/`/g, '\\`')}\`.matchAll(/class\\s+([A-Za-z0-9_]+)/g)];
+          for (const m of matches) {
+            try {
+              const cls = eval(m[1]);
+              if (typeof cls === 'function') return new cls();
+            } catch(e) {}
+          }
+
           throw new Error("No Applet class found. Ensure code defines a class conforming to the Click Simulator spec.");
-        })();
+        })(arguments[0]);
       `;
 
       const factory = new Function(wrapped);
-      const app = factory();
+      const app = factory(ClickArt);
 
-      if (app && typeof app.init === 'function') {
-        app.init();
+      if (app) {
+        // Wire simulator references matching ClickSimulator.js and Applet base class
+        app.sim = fbRef.current;
+        app.display = fbRef.current;
+        app.sound = synthRef.current;
+
+        if (typeof app.init === 'function') {
+          app.init();
+        } else if (typeof app.setup === 'function') {
+          app.setup();
+        }
       }
 
       appInstanceRef.current = app;
@@ -148,19 +212,30 @@ export default function OledSimulator({
       if (canvas && fb) {
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          fb.updateLeds(now);
+
           if (!isPaused && app && !simError) {
             try {
+              // Input environment packet passed to update
+              const input = {
+                sound: fb.sound,
+                leds: {
+                  set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
+                  setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
+                  flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
+                  celebrate: (d?: number) => fb.startCelebration(d),
+                  startBreathe: (r: number, g: number, b: number, p?: number) => fb.startBreathe(r, g, b, p),
+                  clear: () => fb.clearLeds()
+                },
+                actionPressed: isActionActiveRef.current,
+                isActionPressed: isActionActiveRef.current,
+                modePressed: isModeActiveRef.current,
+                isModePressed: isModeActiveRef.current
+              };
+
               // Update applet logic
               if (typeof app.update === 'function') {
-                app.update(dt, {
-                  sound: fb.sound,
-                  leds: {
-                    set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
-                    setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
-                    flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
-                    clear: () => fb.clearLeds()
-                  }
-                });
+                app.update(dt, input);
               }
 
               // Draw applet onto monochrome framebuffer
@@ -172,7 +247,7 @@ export default function OledSimulator({
             }
           }
 
-          // Render framebuffer to HTML5 canvas (128x64 with realistic OLED white/blue glow)
+          // Render framebuffer to HTML5 canvas (128x64 with crisp OLED pixel styling)
           const imgData = ctx.createImageData(128, 64);
           const data = imgData.data;
 
@@ -215,77 +290,124 @@ export default function OledSimulator({
     };
   }, [isPaused, simError]);
 
-  // Physical Button Triggers
+  // Physical Button Triggers (Touch/Mouse & Keyboard)
   const handleActionPress = useCallback(() => {
+    if (isActionActiveRef.current) return;
+    isActionActiveRef.current = true;
+    actionPressStartTime.current = performance.now();
     setIsActionActive(true);
-    const fb = fbRef.current;
-    const app = appInstanceRef.current;
 
-    if (fb && app) {
-      if (typeof app.onActionClick === 'function') {
-        try {
-          app.onActionClick({
-            sound: fb.sound,
-            leds: {
-              set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
-              setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
-              flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
-              clear: () => fb.clearLeds()
-            }
-          });
-        } catch (e: any) {
-          console.warn('Action click handler error:', e);
-        }
+    const app = appInstanceRef.current;
+    if (app && typeof app.onActionPress === 'function') {
+      try {
+        app.onActionPress();
+      } catch (e) {
+        console.warn('Action press handler error:', e);
       }
     }
   }, []);
 
   const handleActionRelease = useCallback(() => {
+    if (!isActionActiveRef.current) return;
+    const dur = performance.now() - actionPressStartTime.current;
+    isActionActiveRef.current = false;
     setIsActionActive(false);
+
+    const fb = fbRef.current;
+    const app = appInstanceRef.current;
+    if (!fb || !app) return;
+
+    try {
+      if (typeof app.onActionRelease === 'function') {
+        app.onActionRelease(dur);
+      }
+
+      const env = {
+        sound: fb.sound,
+        leds: {
+          set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
+          setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
+          flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
+          celebrate: (d?: number) => fb.startCelebration(d),
+          clear: () => fb.clearLeds()
+        }
+      };
+
+      if (dur >= 500 && typeof app.onActionHold === 'function') {
+        app.onActionHold(env);
+      } else if (typeof app.onActionClick === 'function') {
+        app.onActionClick(env);
+      }
+    } catch (e: any) {
+      console.warn('Action release handler error:', e);
+    }
   }, []);
 
   const handleModePress = useCallback(() => {
+    if (isModeActiveRef.current) return;
+    isModeActiveRef.current = true;
+    modePressStartTime.current = performance.now();
     setIsModeActive(true);
-    const fb = fbRef.current;
-    const app = appInstanceRef.current;
 
-    if (fb && app) {
-      if (typeof app.onModeClick === 'function') {
-        try {
-          app.onModeClick({
-            sound: fb.sound,
-            leds: {
-              set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
-              setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
-              flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
-              clear: () => fb.clearLeds()
-            }
-          });
-        } catch (e: any) {
-          console.warn('Mode click handler error:', e);
-        }
+    const app = appInstanceRef.current;
+    if (app && typeof app.onModePress === 'function') {
+      try {
+        app.onModePress();
+      } catch (e) {
+        console.warn('Mode press handler error:', e);
       }
     }
   }, []);
 
   const handleModeRelease = useCallback(() => {
+    if (!isModeActiveRef.current) return;
+    const dur = performance.now() - modePressStartTime.current;
+    isModeActiveRef.current = false;
     setIsModeActive(false);
+
+    const fb = fbRef.current;
+    const app = appInstanceRef.current;
+    if (!fb || !app) return;
+
+    try {
+      if (typeof app.onModeRelease === 'function') {
+        app.onModeRelease(dur);
+      }
+
+      const env = {
+        sound: fb.sound,
+        leds: {
+          set: (idx: 0 | 1, r: number, g: number, b: number) => fb.setLed(idx, r, g, b),
+          setAll: (r: number, g: number, b: number) => fb.setBothLeds(r, g, b),
+          flash: (r: number, g: number, b: number, d?: number) => fb.flashLeds(r, g, b, d),
+          celebrate: (d?: number) => fb.startCelebration(d),
+          clear: () => fb.clearLeds()
+        }
+      };
+
+      if (dur >= 500 && typeof app.onModeHold === 'function') {
+        app.onModeHold(env);
+      } else if (typeof app.onModeClick === 'function') {
+        app.onModeClick(env);
+      }
+    } catch (e: any) {
+      console.warn('Mode release handler error:', e);
+    }
   }, []);
 
   // Keyboard shortcut listener: Space/Enter = ACTION, Key M = MODE
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input or textarea
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
 
       if (e.code === 'Space' || e.code === 'Enter') {
         e.preventDefault();
-        if (!isActionActive) handleActionPress();
+        handleActionPress();
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
-        if (!isModeActive) handleModePress();
+        handleModePress();
       }
     };
 
@@ -295,8 +417,10 @@ export default function OledSimulator({
       }
 
       if (e.code === 'Space' || e.code === 'Enter') {
+        e.preventDefault();
         handleActionRelease();
       } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
         handleModeRelease();
       }
     };
@@ -308,7 +432,7 @@ export default function OledSimulator({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [handleActionPress, handleActionRelease, handleModePress, handleModeRelease, isActionActive, isModeActive]);
+  }, [handleActionPress, handleActionRelease, handleModePress, handleModeRelease]);
 
   // Take screenshot
   const handleScreenshot = () => {
@@ -337,29 +461,22 @@ export default function OledSimulator({
       {/* Top Device Header & Controls */}
       <div className="sim-top-toolbar">
         <div className="sim-device-badge">
-          <span className="live-indicator-dot"></span>
-          <span className="device-label">CLICK HARDWARE EMULATOR</span>
-          <span className="mcu-tag">{activeMcu}</span>
+          <span className="live-indicator-dot" title="RP2354A live hardware runtime active"></span>
+          <span className="device-label">CLICK EMULATOR</span>
+          <span className="mcu-static-badge" title="Target Architecture: Raspberry Pi RP2354A (150MHz Dual Core)">
+            <Cpu size={11} />
+            <span>RP2354A</span>
+          </span>
         </div>
 
         <div className="sim-toolbar-actions">
           <button
             type="button"
-            className="sim-btn-icon"
-            onClick={() => setActiveMcu(m => m === 'RP2354A' ? 'ESP32' : 'RP2354A')}
-            title={`Switch target MCU (Current: ${activeMcu})`}
-          >
-            <Cpu size={14} />
-            <span className="btn-label-text">{activeMcu}</span>
-          </button>
-
-          <button
-            type="button"
-            className="sim-btn-icon"
+            className={`sim-btn-icon ${!isAudioEnabled ? 'muted' : ''}`}
             onClick={() => setIsAudioEnabled(!isAudioEnabled)}
-            title={isAudioEnabled ? 'Mute Piezo Buzzer' : 'Unmute Piezo Buzzer'}
+            title={isAudioEnabled ? 'Mute Piezo Buzzer (GP27)' : 'Unmute Piezo Buzzer'}
           >
-            {isAudioEnabled ? <Volume2 size={15} className="text-cyan" /> : <VolumeX size={15} />}
+            {isAudioEnabled ? <Volume2 size={14} className="text-cyan" /> : <VolumeX size={14} />}
           </button>
 
           <button
@@ -368,7 +485,7 @@ export default function OledSimulator({
             onClick={() => setIsPaused(!isPaused)}
             title={isPaused ? 'Resume Simulation' : 'Pause Simulation'}
           >
-            {isPaused ? <Play size={14} className="text-cyan" /> : <Pause size={14} />}
+            {isPaused ? <Play size={13} className="text-cyan" /> : <Pause size={13} />}
           </button>
 
           <button
@@ -377,16 +494,16 @@ export default function OledSimulator({
             onClick={mountApplet}
             title="Reset Applet State"
           >
-            <RotateCcw size={14} />
+            <RotateCcw size={13} />
           </button>
 
           <button
             type="button"
             className="sim-btn-icon"
             onClick={handleScreenshot}
-            title="Export Frame PNG"
+            title="Capture OLED Frame (.png)"
           >
-            <Camera size={14} />
+            <Camera size={13} />
           </button>
         </div>
       </div>

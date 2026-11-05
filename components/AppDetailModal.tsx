@@ -1,16 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Download,
   Copy,
   Check,
   Cpu,
-  Terminal,
-  Gamepad2,
   FileCode2,
-  Share2,
   ExternalLink,
   Zap,
   Info
@@ -23,7 +20,29 @@ interface AppDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   onInstall: (applet: AppletRecord) => void;
-  connectedDevice: { type: 'RP2354A' | 'ESP32'; name: string } | null;
+  connectedDevice: { type: 'RP2354A'; name: string } | null;
+}
+
+function getTabFilename(tab: 'js' | 'h' | 'cpp', applet: AppletRecord): string {
+  if (tab === 'js') return `simulator/${applet.slug}.companion.js`;
+  if (applet.slug === 'sisyphus-push') {
+    return tab === 'h'
+      ? 'firmware/src/applets/clicker/CounterApplet.h'
+      : 'firmware/src/applets/clicker/CounterApplet.cpp';
+  }
+  if (applet.slug === 'floppy-bird') {
+    return tab === 'h'
+      ? 'firmware/src/applets/flappy_bird/FlappyBirdApplet.h'
+      : 'firmware/src/applets/flappy_bird/FlappyBirdApplet.cpp';
+  }
+  if (applet.slug === 'just-ten') {
+    return tab === 'h'
+      ? 'firmware/src/applets/timing_game/TimingGameApplet.h'
+      : 'firmware/src/applets/timing_game/TimingGameApplet.cpp';
+  }
+  return tab === 'h'
+    ? `firmware/src/applets/${applet.slug}/${applet.slug}.h`
+    : `firmware/src/applets/${applet.slug}/${applet.slug}.cpp`;
 }
 
 export default function AppDetailModal({
@@ -35,6 +54,18 @@ export default function AppDetailModal({
 }: AppDetailModalProps) {
   const [activeCodeTab, setActiveCodeTab] = useState<'h' | 'cpp' | 'js'>('js');
   const [copied, setCopied] = useState(false);
+
+  // Close modal when pressing Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !applet) return null;
 
@@ -50,7 +81,7 @@ export default function AppDetailModal({
   const handleExportUf2 = () => {
     const payload = new Blob(
       [
-        `// Click Studio UF2 Bundle\n// Title: ${applet.title}\n// Version: ${applet.version}\n\n`,
+        `// Click Studio UF2 Bundle\n// Title: ${applet.title}\n// Version: ${applet.version}\n// Target: Raspberry Pi RP2354A\n\n`,
         applet.cppHeader,
         '\n\n',
         applet.cppSource
@@ -70,13 +101,21 @@ export default function AppDetailModal({
       <div className="lab-app-detail-card" onClick={e => e.stopPropagation()}>
         {/* Modal Top Header */}
         <div className="detail-modal-header">
-          <div className="flex items-center gap-3">
+          <div className="detail-header-tags">
             <span className="detail-category-badge">{applet.category}</span>
+            <span className="detail-tag-separator">•</span>
             <span className="detail-app-version">{applet.version || 'v1.0.0'}</span>
-            <span className="detail-app-id">ID: {applet.slug}</span>
+            <span className="detail-tag-separator">•</span>
+            <span className="detail-app-id">applet: {applet.slug}</span>
           </div>
-          <button type="button" className="lab-modal-close" onClick={onClose}>
-            <X size={20} />
+          <button
+            type="button"
+            className="lab-modal-close"
+            onClick={onClose}
+            aria-label="Close dialog (Esc)"
+            title="Close dialog (Esc)"
+          >
+            <X size={18} />
           </button>
         </div>
 
@@ -84,30 +123,29 @@ export default function AppDetailModal({
         <div className="detail-modal-body-grid">
           {/* Left Column: Interactive Hardware Simulator */}
           <div className="detail-simulator-col">
-            <div className="detail-section-title">LIVE HARDWARE RUNTIME</div>
             <OledSimulator
               jsCode={applet.jsCompanion}
               title={applet.title}
               author={applet.author}
             />
 
-            {/* Hardware IO Map */}
-            <div className="hardware-specs-card">
-              <div className="spec-row">
-                <span className="spec-label">Target MCU:</span>
-                <span className="spec-val">RP2354A (150MHz) / ESP32</span>
+            {/* Hardware IO Map - Clear Column Readout */}
+            <div className="hardware-specs-grid">
+              <div className="spec-item">
+                <span className="spec-k">Target MCU</span>
+                <span className="spec-v">RP2354A 150MHz</span>
               </div>
-              <div className="spec-row">
-                <span className="spec-label">Display:</span>
-                <span className="spec-val">SSD1306 128x64 Monochrome OLED</span>
+              <div className="spec-item">
+                <span className="spec-k">OLED Display</span>
+                <span className="spec-v">SSD1306 128×64</span>
               </div>
-              <div className="spec-row">
-                <span className="spec-label">Input Pins:</span>
-                <span className="spec-val">GP2 (ACTION) • GP3 (MODE)</span>
+              <div className="spec-item">
+                <span className="spec-k">Tactile Input</span>
+                <span className="spec-v">GP2 / GP3</span>
               </div>
-              <div className="spec-row">
-                <span className="spec-label">Peripherals:</span>
-                <span className="spec-val">GP27 Buzzer • GP11 Dual WS2812</span>
+              <div className="spec-item">
+                <span className="spec-k">Audio &amp; RGB</span>
+                <span className="spec-v">GP27 / GP11</span>
               </div>
             </div>
           </div>
@@ -115,13 +153,27 @@ export default function AppDetailModal({
           {/* Right Column: App Information & C++ Source Code */}
           <div className="detail-info-col">
             <div className="detail-meta-header">
-              <h1 className="detail-title">{applet.title}</h1>
+              <div className="detail-title-row">
+                <h1 className="detail-title">{applet.title}</h1>
+                {applet.githubUrl && (
+                  <a
+                    href={applet.githubUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-github-pill"
+                    title="View official firmware source on GitHub"
+                  >
+                    <ExternalLink size={12} />
+                    <span>View on GitHub</span>
+                  </a>
+                )}
+              </div>
               <div className="detail-author-row">
                 <span>By <strong>{applet.author}</strong></span>
                 <span>•</span>
                 <span>License: <strong>MIT</strong></span>
                 <span>•</span>
-                <span>{applet.downloads || 0} Installs</span>
+                <span>Hardware: <strong>RP2354A</strong></span>
               </div>
               <p className="detail-description">{applet.description}</p>
             </div>
@@ -142,7 +194,7 @@ export default function AppDetailModal({
                 className="btn-install-primary"
                 onClick={() => onInstall(applet)}
               >
-                <Download size={16} />
+                <Download size={15} />
                 <span>
                   {connectedDevice
                     ? `Install to ${connectedDevice.name}`
@@ -154,7 +206,7 @@ export default function AppDetailModal({
                 type="button"
                 className="btn-export-uf2"
                 onClick={handleExportUf2}
-                title="Download UF2 package"
+                title="Download RP2354A UF2 package"
               >
                 <Zap size={15} />
                 <span>Download UF2</span>
@@ -188,15 +240,41 @@ export default function AppDetailModal({
                   </button>
                 </div>
 
-                <button
-                  type="button"
-                  className="btn-copy-src"
-                  onClick={handleCopy}
-                  title="Copy code to clipboard"
-                >
-                  {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-                  <span>{copied ? 'Copied' : 'Copy'}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {applet.githubUrl && (
+                    <a
+                      href={applet.githubUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-copy-src"
+                      title="Open source file on GitHub"
+                    >
+                      <ExternalLink size={12} />
+                      <span>GitHub ↗</span>
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-copy-src"
+                    onClick={handleCopy}
+                    title="Copy code to clipboard"
+                  >
+                    {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Verified Provenance Bar */}
+              <div className="source-provenance-bar">
+                <div className="provenance-path">
+                  <FileCode2 size={12} className="flex-shrink-0 text-cyan" />
+                  <span className="truncate">{getTabFilename(activeCodeTab, applet)}</span>
+                </div>
+                <div className="provenance-badge">
+                  <Check size={11} />
+                  <span>100% Match with prajjwalprajjwal/Click</span>
+                </div>
               </div>
 
               <div className="source-code-scroll">

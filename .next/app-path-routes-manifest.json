@@ -1,0 +1,12 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/admin/page": "/admin",
+  "/api/admin/applets/route": "/api/admin/applets",
+  "/api/applets/[id]/like/route": "/api/applets/[id]/like",
+  "/api/applets/route": "/api/applets",
+  "/api/generate/route": "/api/generate",
+  "/api/sdk-status/route": "/api/sdk-status",
+  "/favicon.ico/route": "/favicon.ico",
+  "/page": "/"
+}

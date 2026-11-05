@@ -19,7 +19,8 @@ import {
   Trash2,
   HardDrive,
   Activity,
-  ArrowUpRight
+  ArrowUpRight,
+  GitPullRequest
 } from 'lucide-react';
 import { AppletRecord } from '@/lib/db';
 import AppCard from '@/components/AppCard';
@@ -35,7 +36,7 @@ export default function ClickLabHome() {
 
   // Connected Hardware State
   const [connectedDevice, setConnectedDevice] = useState<{
-    type: 'RP2354A' | 'ESP32';
+    type: 'RP2354A';
     name: string;
     serial?: string;
   } | null>(null);
@@ -195,10 +196,10 @@ export default function ClickLabHome() {
             target="_blank"
             rel="noopener noreferrer"
             className="nav-hardware-link"
-            title="Visit official Click Handheld website"
+            title="Visit Click Companion (click.uprajjwal.com.np)"
           >
             <span className="hardware-live-dot"></span>
-            <span>click.uprajjwal.com.np</span>
+            <span>Click Companion</span>
             <ArrowUpRight size={13} />
           </a>
         </div>
@@ -264,9 +265,16 @@ export default function ClickLabHome() {
             )}
           </button>
 
-          <Link href="/admin" className="admin-header-link" title="Admin Moderation Portal">
-            Admin
-          </Link>
+          <a
+            href="https://github.com/prajjwalprajjwal/click-studio"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-header-contribute"
+            title="Contribute to Click Studio on GitHub"
+          >
+            <GitPullRequest size={14} />
+            <span>Contribute</span>
+          </a>
         </div>
       </header>
 
@@ -310,7 +318,7 @@ export default function ClickLabHome() {
                 rel="noopener noreferrer"
                 className="sidebar-hw-link"
               >
-                <span>click.uprajjwal.com.np</span>
+                <span>Click Companion</span>
                 <ArrowUpRight size={13} />
               </a>
               <a
@@ -626,7 +634,15 @@ export default function ClickLabHome() {
               rel="noopener noreferrer"
               className="app-footer-link"
             >
-              click.uprajjwal.com.np ↗
+              Click Companion ↗
+            </a>
+            <a
+              href="https://github.com/prajjwalprajjwal/click-studio"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-footer-link"
+            >
+              Click Studio Repo ↗
             </a>
             <a
               href="https://github.com/prajjwalprajjwal/Click"
@@ -634,11 +650,8 @@ export default function ClickLabHome() {
               rel="noopener noreferrer"
               className="app-footer-link"
             >
-              Firmware Repo ↗
+              Firmware &amp; OS Repo ↗
             </a>
-            <Link href="/admin" className="app-footer-link">
-              Admin Portal
-            </Link>
           </div>
         </div>
       </footer>

@@ -1,0 +1,12 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/admin/page": "app/admin/page.js",
+  "/api/admin/applets/route": "app/api/admin/applets/route.js",
+  "/api/applets/[id]/like/route": "app/api/applets/[id]/like/route.js",
+  "/api/applets/route": "app/api/applets/route.js",
+  "/api/generate/route": "app/api/generate/route.js",
+  "/api/sdk-status/route": "app/api/sdk-status/route.js",
+  "/favicon.ico/route": "app/favicon.ico/route.js",
+  "/page": "app/page.js"
+}
